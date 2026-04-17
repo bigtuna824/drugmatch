@@ -14,24 +14,90 @@ include("sv_entities.lua")
 -- Keyed by SteamID; cleared on round reset so normal round boundaries still work.
 PM_KillCache = {}
 
--- ─── Weapon pools (HL2 loadout — random primary + sidearm + melee each spawn) ──
--- Excluded by design: weapon_rpg (one-shot, unbalanced), weapon_smg1 (grenade launcher).
--- Rage Virus melee enforcement relies on Slot 0 (crowbar / stunstick).
-local PM_PRIMARIES = {
-    "weapon_ar2",
-    "weapon_shotgun",
-    "weapon_crossbow",
+-- ─── Weapon pools (built dynamically from all installed SWEPs at map load) ────
+-- Rage Virus melee enforcement relies on Slot 0 weapons.
+local PM_PRIMARIES   = {}
+local PM_SECONDARIES = {}
+local PM_MELEE       = {}
+
+-- Weapons that should never appear in the loadout pool.
+-- Add classnames here to exclude specific addon weapons if they're broken.
+local PM_WEAPON_BLACKLIST = {
+    weapon_physgun     = true,
+    weapon_physcannon  = true,
+    weapon_toolgun     = true,
+    gmod_tool          = true,
+    gmod_camera        = true,
+    weapon_bugbait     = true,
+    weapon_frag        = true,
+    weapon_rpg         = true,
+    weapon_smg1        = true,  -- has grenade launcher attachment
+    weapon_pill_bottle = true,  -- our own pill weapon
 }
 
-local PM_SECONDARIES = {
-    "weapon_pistol",
-    "weapon_357",
-}
+-- Returns true for abstract base classes that aren't real usable weapons.
+local function PM_IsBaseClass(class)
+    if not class then return true end
+    local l = class:lower()
+    return l == "weapon_base" or l == "swep" or l == "weapon_cs_base"
+        or l:sub(1, 5) == "base_" or l:sub(-5) == "_base"
+end
 
-local PM_MELEE = {
-    "weapon_crowbar",
-    "weapon_stunstick",
-}
+-- Scan all registered SWEPs and sort them into the three pools by slot.
+-- Called once in InitPostEntity so all addon weapons are already registered.
+local function PM_BuildWeaponPools()
+    local primaries   = {}
+    local secondaries = {}
+    local melees      = {}
+
+    for _, wepData in ipairs(weapons.GetList()) do
+        local class = wepData.ClassName
+        if PM_IsBaseClass(class)                             then continue end
+        if PM_WEAPON_BLACKLIST[class]                        then continue end
+        if not wepData.PrintName or wepData.PrintName == "" then continue end
+
+        local slot = wepData.Slot
+        if slot == 0 then
+            melees[#melees + 1] = class
+        elseif slot == 1 then
+            primaries[#primaries + 1] = class
+        elseif slot == 2 then
+            secondaries[#secondaries + 1] = class
+        end
+        -- Slots 3+ (grenades, explosives, specials) are excluded intentionally.
+    end
+
+    -- HL2 fallbacks so the gamemode works on a bare server with no addons.
+    if #primaries   == 0 then primaries   = { "weapon_ar2", "weapon_shotgun", "weapon_crossbow" } end
+    if #secondaries == 0 then secondaries = { "weapon_pistol", "weapon_357" } end
+    if #melees      == 0 then melees      = { "weapon_crowbar", "weapon_stunstick" } end
+
+    PM_PRIMARIES   = primaries
+    PM_SECONDARIES = secondaries
+    PM_MELEE       = melees
+
+    print(string.format(
+        "[Drugmatch] Weapon pools: %d primaries, %d secondaries, %d melee",
+        #primaries, #secondaries, #melees
+    ))
+end
+
+-- Give a weapon to a player and automatically provide its ammo.
+-- Reads ammo types from the live weapon entity so it works with any addon SWEP.
+local function PM_GiveWeaponWithAmmo(ply, class)
+    local wep = ply:Give(class)
+    if not IsValid(wep) then return end
+
+    local t1 = wep:GetPrimaryAmmoType()
+    if t1 and t1 > 0 then
+        ply:GiveAmmo(500, game.GetAmmoName(t1))
+    end
+
+    local t2 = wep:GetSecondaryAmmoType()
+    if t2 and t2 > 0 then
+        ply:GiveAmmo(200, game.GetAmmoName(t2))
+    end
+end
 
 -- ─── Random player model pool ────────────────────────────────────────────────
 -- Built once when the map initialises by recursively scanning models/player/.
@@ -79,6 +145,7 @@ end
 
 hook.Add("InitPostEntity", "PM_BuildPools", function()
     PM_BuildModelPool()
+    PM_BuildWeaponPools()
 end)
 
 -- Disable cheats and noclip
@@ -152,19 +219,13 @@ function GM:PlayerSpawn(ply, transiton)
     ply:SetColor(baseCol)
     ply:SetRenderMode(RENDERMODE_TRANSALPHA)
 
-    -- ── Random HL2 loadout: 1 primary + 1 sidearm + 1 melee ────────────────
+    -- ── Random loadout from all installed weapons ────────────────────────────
+    -- Pools are built at map load from every registered SWEP (including addons).
+    -- PM_GiveWeaponWithAmmo handles ammo automatically per weapon.
     ply:StripWeapons()
-    ply:Give(PM_PRIMARIES[math.random(#PM_PRIMARIES)])
-    ply:Give(PM_SECONDARIES[math.random(#PM_SECONDARIES)])
-    ply:Give(PM_MELEE[math.random(#PM_MELEE)])
-
-    -- Generous ammo for all possible weapon types (no hunting for pickups)
-    ply:GiveAmmo(300, "AR2")
-    ply:GiveAmmo(8,   "AR2AltFire")   -- energy balls
-    ply:GiveAmmo(120, "Buckshot")
-    ply:GiveAmmo(30,  "XBowBolt")
-    ply:GiveAmmo(300, "Pistol")
-    ply:GiveAmmo(48,  "357")
+    PM_GiveWeaponWithAmmo(ply, PM_PRIMARIES[math.random(#PM_PRIMARIES)])
+    PM_GiveWeaponWithAmmo(ply, PM_SECONDARIES[math.random(#PM_SECONDARIES)])
+    PM_GiveWeaponWithAmmo(ply, PM_MELEE[math.random(#PM_MELEE)])
 
     -- Per-life pill limit (Q-key chaos pill)
     ply.PM_PillsLeft = math.random(30, 60)
