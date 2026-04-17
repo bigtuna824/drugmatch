@@ -1,0 +1,7 @@
+"drugmatch"
+{
+	"base"		"base"
+	"title"		"Drugmatch"
+	"category"	"pvp"
+	"menusystem"	"1"
+}

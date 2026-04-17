@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# GMod / Steam
+*.bsp
+*.nav
+*.ain
+*.cache
+*.vtf
+*.vmt
+*.mdl
+*.vtx
+*.vvd
+*.phy
